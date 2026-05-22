@@ -2,89 +2,80 @@
 # -*- coding: utf-8 -*-
 """
 ╔══════════════════════════════════════════════════════╗
-║         AOV Mesh CLI  –  Termux Android Tool         ║
+║      AOV Asset Tool  –  Termux Android Edition       ║
 ╠══════════════════════════════════════════════════════╣
-║  input/   ← đặt .assetbundle vào đây                 ║
-║  output/  ← OBJ xuất ra / sửa tại đây                ║
-║  osave/   ← bundle đã import lưu tại đây              ║
+║  Công cụ chỉnh sửa assetbundle Liên Quân (AOV)       ║
+║  hoạt động như AssetStudio / UABE, chạy trên Termux. ║
 ╠══════════════════════════════════════════════════════╣
-║  python mesh_cli.py          → menu tương tác         ║
-║  python mesh_cli.py export   → xuất tất cả mesh       ║
-║  python mesh_cli.py import   → nhập lại mesh          ║
+║  input/   ← đặt .assetbundle gốc vào đây             ║
+║  output/  ← asset xuất ra / chỉnh sửa tại đây        ║
+║  osave/   ← bundle sau khi import lưu tại đây         ║
+╠══════════════════════════════════════════════════════╣
+║  Hỗ trợ:  Texture2D/Sprite (PNG)  ·  Mesh (OBJ)      ║
+║           TextAsset (TXT)  ·  AudioClip (WAV)        ║
+║           AnimationClip + mọi loại khác (JSON)       ║
+╠══════════════════════════════════════════════════════╣
+║  python main.py            → menu tương tác           ║
+║  python main.py list       → liệt kê asset            ║
+║  python main.py export     → xuất tất cả asset        ║
+║  python main.py import     → nhập lại & đóng gói      ║
 ╚══════════════════════════════════════════════════════╝
 """
 
-import os, sys, time
+import os
+import sys
+import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
 
-# auto_scale=True: tự động normalize scale khi thay model khác game
-# Đặt False nếu model đã đúng scale rồi
-AUTO_SCALE = True
+from AssetbundleUtils import AssetTool as AT  # noqa: E402
 
-DIR_INPUT  = os.path.join(ROOT, "input")
+DIR_INPUT = os.path.join(ROOT, "input")
 DIR_OUTPUT = os.path.join(ROOT, "output")
-DIR_OSAVE  = os.path.join(ROOT, "osave")
-
+DIR_OSAVE = os.path.join(ROOT, "osave")
 for d in (DIR_INPUT, DIR_OUTPUT, DIR_OSAVE):
     os.makedirs(d, exist_ok=True)
 
+# Cấu hình runtime
+AUTO_SCALE = True       # tự normalize scale khi import mesh khác game
+FORCE_RGBA32 = False    # ép texture về RGBA32 (an toàn, nhưng nặng hơn)
+
+
 # ── ANSI colours ─────────────────────────────────────
 class C:
-    R="\033[91m"; G="\033[92m"; Y="\033[93m"; B="\033[94m"
-    M="\033[95m"; C="\033[96m"; W="\033[97m"; D="\033[2m"; X="\033[0m"
+    R = "\033[91m"; G = "\033[92m"; Y = "\033[93m"; B = "\033[94m"
+    M = "\033[95m"; C = "\033[96m"; W = "\033[97m"; D = "\033[2m"; X = "\033[0m"
+
 
 def ok(m):   print(f"{C.G}  ✓{C.X}  {m}")
 def err(m):  print(f"{C.R}  ✗{C.X}  {m}")
 def warn(m): print(f"{C.Y}  ⚠{C.X}  {m}")
 def info(m): print(f"{C.B}  →{C.X}  {m}")
-def head(m): print(f"\n{C.M}{'─'*54}{C.X}\n  {C.W}{m}{C.X}\n{C.M}{'─'*54}{C.X}")
 
-# ── UnityPy loader ───────────────────────────────────
-def _up():
+
+def head(m):
+    print(f"\n{C.M}{'─' * 56}{C.X}\n  {C.W}{m}{C.X}\n{C.M}{'─' * 56}{C.X}")
+
+
+def ask(prompt):
     try:
-        import AssetbundleUtils.UnityPy_AOV as up
-        return up
-    except ImportError as e:
-        err(f"Không load được UnityPy_AOV: {e}"); sys.exit(1)
+        return input(f"  {C.Y}{prompt}{C.X} ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return ""
 
-# ── Bundle scan ──────────────────────────────────────
-BUNDLE_EXTS = {".assetbundle", ".bundle", ".ab", ".unity3d"}
-
-def scan_bundles(folder):
-    res = []
-    for f in sorted(os.listdir(folder)):
-        fp = os.path.join(folder, f)
-        if os.path.isfile(fp):
-            _, ext = os.path.splitext(f.lower())
-            if ext in BUNDLE_EXTS or ext == "":
-                res.append(fp)
-    return res
-
-# ── Progress bar ─────────────────────────────────────
-def _make_progress(label):
-    _t = [time.time()]
-    def cb(cur, total):
-        pct = int(cur / total * 100)
-        bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
-        elapsed = time.time() - _t[0]
-        print(f"\r    {label} [{bar}] {pct:3d}%  {elapsed:.1f}s", end="", flush=True)
-    return cb
 
 # ═══════════════════════════════════════════════════════
-#  EXPORT
+#  LIST
 # ═══════════════════════════════════════════════════════
-
-def do_export():
-    head("EXPORT MESH  (bundle → OBJ)")
-    up = _up()
-    bundles = scan_bundles(DIR_INPUT)
+def do_list():
+    head("LIỆT KÊ ASSET trong input/")
+    up = AT.get_up()
+    bundles = AT.scan_bundles(DIR_INPUT)
     if not bundles:
-        warn(f"Không có bundle nào trong input/"); return
-
-    info(f"Tìm thấy {len(bundles)} bundle(s)")
-    total_ok = total_err = 0
+        warn("Không có bundle nào trong input/")
+        return
 
     for bundle_path in bundles:
         bname = os.path.basename(bundle_path)
@@ -92,243 +83,301 @@ def do_export():
         try:
             env = up.load(bundle_path)
         except Exception as e:
-            err(f"Load bundle lỗi: {e}"); total_err += 1; continue
+            err(f"  Load lỗi: {e}")
+            continue
 
-        for obj in env.objects:
-            if obj.type.name != "Mesh":
-                continue
-            try:
-                data = obj.read()
+        items = AT.list_objects(env)
+        if not items:
+            info("  (không có object)")
+            continue
 
-                # Fix: skip nếu parse thất bại và trả về NodeHelper
-                if not hasattr(data, "export"):
-                    warn(f"  id={obj.path_id} → parse thất bại (NodeHelper), bỏ qua")
-                    total_err += 1
-                    continue
+        # gom nhóm theo loại
+        by_type = {}
+        for it in items:
+            by_type.setdefault(it["type"], []).append(it)
 
-                mesh_name = getattr(data, "m_Name", None) or f"mesh_{obj.path_id}"
-                safe_b = bname.replace(".", "_").replace(" ", "_")
-                safe_m = mesh_name.replace("/","_").replace("\\","_").replace(" ","_")
-                out_name = f"{safe_b}__{safe_m}__{obj.path_id}.obj"
-                out_path = os.path.join(DIR_OUTPUT, out_name)
+        for type_name in sorted(by_type):
+            group = by_type[type_name]
+            print(f"  {C.W}{type_name}{C.X} {C.D}({len(group)}){C.X}")
+            for it in group:
+                name = it["name"] or "(no name)"
+                print(f"    {name:<38}  {C.D}id={it['path_id']}{C.X}")
 
-                obj_str = data.export()
-                if not obj_str:
-                    warn(f"  {mesh_name} → export rỗng, bỏ qua"); continue
-
-                with open(out_path, "w", encoding="utf-8") as f:
-                    f.write(obj_str)
-
-                vc = getattr(data, "m_VertexCount", "?")
-                ok(f"  {mesh_name}  [{vc} verts]  →  output/{out_name}")
-                total_ok += 1
-
-            except AttributeError as e:
-                # NodeHelper không có export – skip bình thường
-                warn(f"  id={obj.path_id} → bỏ qua ({e})")
-                total_err += 1
-            except Exception as e:
-                err(f"  id={obj.path_id} lỗi: {e}")
-                total_err += 1
-
-    print()
-    print(f"{C.G}Export xong:{C.X} {total_ok} mesh  |  {C.R}Lỗi/skip:{C.X} {total_err}")
-    info(f"File OBJ tại: {DIR_OUTPUT}")
 
 # ═══════════════════════════════════════════════════════
-#  IMPORT
+#  EXPORT
 # ═══════════════════════════════════════════════════════
+def do_export(type_filter=None, mode="auto"):
+    head("EXPORT ASSET  (bundle → output/)")
+    up = AT.get_up()
+    bundles = AT.scan_bundles(DIR_INPUT)
+    if not bundles:
+        warn("Không có bundle nào trong input/")
+        return
 
-def do_import():
-    head("IMPORT MESH  (OBJ → bundle)")
-    up = _up()
-    from AssetbundleUtils.UnityPy_AOV.export.MeshImporter import import_obj_to_mesh
+    info(f"Chế độ: {mode}" + (f"  ·  lọc loại: {type_filter}" if type_filter else ""))
+    total_ok = total_err = total_skip = 0
 
-    try:
-        import numpy
-        print(f"  {C.G}numpy detected{C.X} – weight transfer sẽ nhanh")
-    except ImportError:
-        print(f"  {C.Y}numpy không có{C.X} – dùng bisect fallback (chậm hơn ~5x)")
-
-    obj_files = [f for f in sorted(os.listdir(DIR_OUTPUT)) if f.lower().endswith(".obj")]
-    if not obj_files:
-        warn("Không có .obj trong output/"); return
-
-    # Nhóm OBJ theo bundle
-    bundle_jobs = {}
-    unparsed = []
-    for fname in obj_files:
-        parts = fname[:-4].split("__")
-        if len(parts) >= 3:
-            rb   = parts[0]
-            mname= "__".join(parts[1:-1])
-            pid  = parts[-1]
-            bundle_jobs.setdefault(rb, []).append((pid, os.path.join(DIR_OUTPUT, fname), mname))
-        else:
-            unparsed.append(fname)
-
-    if unparsed:
-        warn(f"Không parse được bundle từ {len(unparsed)} file:")
-        for f in unparsed: warn(f"  {f}")
-    if not bundle_jobs:
-        err("Không có OBJ hợp lệ."); return
-
-    bundles_in_input = {os.path.basename(p): p for p in scan_bundles(DIR_INPUT)}
-    total_ok = total_err = 0
-
-    for raw_key, jobs in bundle_jobs.items():
-        bundle_file = _find_bundle(raw_key, bundles_in_input)
-        if bundle_file is None:
-            err(f"Không tìm thấy bundle '{raw_key}' trong input/")
-            err("  Có: " + ", ".join(bundles_in_input.keys()))
-            total_err += len(jobs); continue
-
-        bname = os.path.basename(bundle_file)
-        print(f"\n{C.C}[{bname}]{C.X}  ({len(jobs)} mesh)")
-        try:
-            env = up.load(bundle_file)
-        except Exception as e:
-            err(f"  Load lỗi: {e}"); total_err += len(jobs); continue
-
-        obj_map  = {str(o.path_id): o for o in env.objects if o.type.name == "Mesh"}
-        modified = False
-
-        for (pid, obj_path, mname) in jobs:
-            if pid not in obj_map:
-                err(f"  id={pid} ({mname}) không có trong bundle"); total_err += 1; continue
-            try:
-                t0 = time.time()
-                pcb = _make_progress(mname[:20])
-                import_obj_to_mesh(obj_map[pid], obj_path, progress_cb=pcb, auto_scale=AUTO_SCALE)
-                print()  # newline sau progress bar
-                elapsed = time.time() - t0
-                ok(f"  {mname}  (id={pid})  {elapsed:.1f}s")
-                modified = True; total_ok += 1
-            except ValueError as e:
-                print()
-                err(f"  {mname}: {e}"); total_err += 1
-            except Exception as e:
-                print()
-                import traceback
-                err(f"  {mname}: {e}"); traceback.print_exc(); total_err += 1
-
-        if not modified:
-            info("  Không có mesh nào thay đổi, bỏ qua save."); continue
-
-        out_bundle = os.path.join(DIR_OSAVE, bname)
-        try:
-            data = _save_env(env)
-            with open(out_bundle, "wb") as f: f.write(data)
-            ok(f"  Đã lưu → osave/{bname}")
-        except Exception as e:
-            err(f"  Lưu bundle lỗi: {e}"); total_err += 1
-
-    print()
-    print(f"{C.G}Import xong:{C.X} {total_ok} mesh  |  {C.R}Lỗi:{C.X} {total_err}")
-    info(f"Bundle tại: {DIR_OSAVE}")
-
-
-def _find_bundle(raw_key, bundles_dict):
-    if raw_key in bundles_dict: return bundles_dict[raw_key]
-    for bname, bpath in bundles_dict.items():
-        if bname.replace(".", "_").replace(" ", "_") == raw_key: return bpath
-    for bname, bpath in bundles_dict.items():
-        n = bname.replace(".", "_").replace(" ", "_")
-        if raw_key.startswith(n) or n.startswith(raw_key): return bpath
-    return None
-
-
-def _save_env(env):
-    try:
-        return env.file.save("lz4") if hasattr(env, "file") else list(env.files.values())[0].save("lz4")
-    except Exception:
-        return env.file.save("lzma") if hasattr(env, "file") else list(env.files.values())[0].save("lzma")
-
-# ═══════════════════════════════════════════════════════
-#  LIST
-# ═══════════════════════════════════════════════════════
-
-def do_list():
-    head("LIST MESH trong input/")
-    up = _up()
-    for bundle_path in scan_bundles(DIR_INPUT):
+    for bundle_path in bundles:
         bname = os.path.basename(bundle_path)
         print(f"\n{C.C}[{bname}]{C.X}")
         try:
             env = up.load(bundle_path)
         except Exception as e:
-            err(f"  Load lỗi: {e}"); continue
-        found = False
+            err(f"  Load lỗi: {e}")
+            continue
+
         for obj in env.objects:
-            if obj.type.name != "Mesh": continue
-            try:
-                data  = obj.read()
-                if not hasattr(data, "m_Name"):
-                    warn(f"  id={obj.path_id} → parse thất bại, bỏ qua"); continue
-                name  = getattr(data, "m_Name", f"[{obj.path_id}]")
-                vc    = getattr(data, "m_VertexCount", "?")
-                subs  = len(getattr(data, "m_SubMeshes", []))
-                bones = len(getattr(data, "m_BindPose", []))
-                print(f"  {C.W}{name:<40}{C.X}"
-                      f"  verts={C.Y}{str(vc):<6}{C.X}"
-                      f"  sub={subs}  bones={bones}"
-                      f"  {C.D}id={obj.path_id}{C.X}")
-                found = True
-            except Exception as e:
-                err(f"  id={obj.path_id} lỗi: {e}")
-        if not found:
-            info("  (không có Mesh)")
+            type_name = obj.type.name
+            if type_filter and type_name not in type_filter:
+                total_skip += 1
+                continue
+            success, result = AT.export_object(obj, bname, DIR_OUTPUT, mode=mode)
+            if success:
+                ok(f"  {type_name:<16} → {os.path.basename(result)}")
+                total_ok += 1
+            else:
+                warn(f"  {result}")
+                total_err += 1
+
+    print()
+    print(f"{C.G}Export xong:{C.X} {total_ok}  |  "
+          f"{C.R}Lỗi/skip:{C.X} {total_err}  |  {C.D}bỏ qua: {total_skip}{C.X}")
+    info(f"Asset tại: {DIR_OUTPUT}")
+
+
+def export_menu():
+    head("EXPORT – chọn tuỳ chọn")
+    print(f"  {C.G}1{C.X}  Export tất cả (tự động theo loại)")
+    print(f"  {C.G}2{C.X}  Chỉ Texture2D/Sprite (PNG)")
+    print(f"  {C.G}3{C.X}  Chỉ Mesh (OBJ)")
+    print(f"  {C.G}4{C.X}  Chỉ AnimationClip (JSON)")
+    print(f"  {C.G}5{C.X}  Chỉ TextAsset / AudioClip")
+    print(f"  {C.G}6{C.X}  Export TẤT CẢ dạng JSON typetree (kiểu UABE dump)")
+    print(f"  {C.G}7{C.X}  Export TẤT CẢ dạng RAW (.dat)")
+    print(f"  {C.R}0{C.X}  Quay lại\n")
+    ch = ask("Chọn:")
+    if ch == "1":
+        do_export()
+    elif ch == "2":
+        do_export(type_filter=AT.TEXTURE_TYPES)
+    elif ch == "3":
+        do_export(type_filter=AT.MESH_TYPES)
+    elif ch == "4":
+        do_export(type_filter={"AnimationClip"}, mode="json")
+    elif ch == "5":
+        do_export(type_filter=AT.TEXT_TYPES | AT.AUDIO_TYPES)
+    elif ch == "6":
+        do_export(mode="json")
+    elif ch == "7":
+        do_export(mode="raw")
+    elif ch == "0":
+        return
+    else:
+        warn("Lựa chọn không hợp lệ.")
+
+
+# ═══════════════════════════════════════════════════════
+#  IMPORT
+# ═══════════════════════════════════════════════════════
+def _find_bundle(raw_key, bundles_dict):
+    """Tìm bundle gốc khớp với tên đã sanitize trong filename."""
+    if raw_key in bundles_dict:
+        return bundles_dict[raw_key]
+    for bname, bpath in bundles_dict.items():
+        if AT.sanitize(bname) == raw_key:
+            return bpath
+    for bname, bpath in bundles_dict.items():
+        n = AT.sanitize(bname)
+        if raw_key.startswith(n) or n.startswith(raw_key):
+            return bpath
+    return None
+
+
+def do_import():
+    head("IMPORT ASSET  (output/ → osave/)")
+
+    files = [f for f in sorted(os.listdir(DIR_OUTPUT))
+             if os.path.isfile(os.path.join(DIR_OUTPUT, f))]
+    if not files:
+        warn("output/ trống – không có gì để import.")
+        return
+
+    # gom file theo bundle
+    jobs = {}        # bundle_key -> list[(path_id, filepath, ext, name)]
+    unparsed = []
+    for fname in files:
+        meta = AT.parse_filename(fname)
+        if not meta:
+            unparsed.append(fname)
+            continue
+        jobs.setdefault(meta["bundle"], []).append(
+            (meta["path_id"], os.path.join(DIR_OUTPUT, fname),
+             meta["ext"], meta["name"])
+        )
+
+    if unparsed:
+        warn(f"Bỏ qua {len(unparsed)} file không đúng quy ước tên:")
+        for f in unparsed:
+            print(f"      {C.D}{f}{C.X}")
+    if not jobs:
+        err("Không có file hợp lệ để import.")
+        return
+
+    up = AT.get_up()
+    bundles_in_input = {os.path.basename(p): p
+                        for p in AT.scan_bundles(DIR_INPUT)}
+    total_ok = total_err = 0
+
+    for bundle_key, file_jobs in jobs.items():
+        bundle_path = _find_bundle(bundle_key, bundles_in_input)
+        if bundle_path is None:
+            err(f"Không tìm thấy bundle '{bundle_key}' trong input/")
+            err(f"  Có sẵn: {', '.join(bundles_in_input.keys()) or '(trống)'}")
+            total_err += len(file_jobs)
+            continue
+
+        bname = os.path.basename(bundle_path)
+        print(f"\n{C.C}[{bname}]{C.X}  ({len(file_jobs)} file)")
+        try:
+            env = up.load(bundle_path)
+        except Exception as e:
+            err(f"  Load lỗi: {e}")
+            total_err += len(file_jobs)
+            continue
+
+        obj_map = {str(o.path_id): o for o in env.objects}
+        modified = False
+
+        for (path_id, filepath, ext, name) in file_jobs:
+            obj = obj_map.get(path_id)
+            if obj is None:
+                err(f"  id={path_id} ({name}) không có trong bundle")
+                total_err += 1
+                continue
+            t0 = time.time()
+            success, msg = AT.import_file(
+                obj, filepath, ext,
+                auto_scale=AUTO_SCALE, force_rgba32=FORCE_RGBA32,
+            )
+            if success:
+                ok(f"  {name}  ({msg})  {time.time() - t0:.1f}s")
+                modified = True
+                total_ok += 1
+            else:
+                err(f"  {name}: {msg.splitlines()[0]}")
+                total_err += 1
+
+        if not modified:
+            info("  Không có thay đổi, bỏ qua lưu bundle.")
+            continue
+
+        out_bundle = os.path.join(DIR_OSAVE, bname)
+        try:
+            _, packer = AT.save_bundle(env, out_bundle)
+            ok(f"  Đã lưu → osave/{bname}  ({packer})")
+        except Exception as e:
+            err(f"  Lưu bundle lỗi: {e}")
+            total_err += 1
+
+    print()
+    print(f"{C.G}Import xong:{C.X} {total_ok}  |  {C.R}Lỗi:{C.X} {total_err}")
+    info(f"Bundle đã mod tại: {DIR_OSAVE}")
+    info("Chép bundle trong osave/ đè vào game để áp dụng mod.")
+
+
+# ═══════════════════════════════════════════════════════
+#  SETTINGS
+# ═══════════════════════════════════════════════════════
+def settings_menu():
+    global AUTO_SCALE, FORCE_RGBA32
+    head("CÀI ĐẶT")
+    print(f"  {C.G}1{C.X}  Auto-scale mesh khi import : "
+          f"{C.G if AUTO_SCALE else C.R}{'BẬT' if AUTO_SCALE else 'TẮT'}{C.X}")
+    print(f"  {C.G}2{C.X}  Ép texture về RGBA32       : "
+          f"{C.G if FORCE_RGBA32 else C.R}{'BẬT' if FORCE_RGBA32 else 'TẮT'}{C.X}")
+    print(f"  {C.R}0{C.X}  Quay lại\n")
+    print(f"  {C.D}Auto-scale: chuẩn hoá kích thước khi thay model khác game.{C.X}")
+    print(f"  {C.D}RGBA32: không mất chất lượng nhưng bundle nặng hơn.{C.X}\n")
+    ch = ask("Chọn để bật/tắt:")
+    if ch == "1":
+        AUTO_SCALE = not AUTO_SCALE
+        info(f"Auto-scale = {AUTO_SCALE}")
+    elif ch == "2":
+        FORCE_RGBA32 = not FORCE_RGBA32
+        info(f"Force RGBA32 = {FORCE_RGBA32}")
+
 
 # ═══════════════════════════════════════════════════════
 #  MENU
 # ═══════════════════════════════════════════════════════
-
 def print_banner():
     print(f"""
 {C.M}╔══════════════════════════════════════════════════════╗
-║      {C.W}AOV Mesh CLI  –  Termux Edition{C.M}                 ║
+║      {C.W}AOV Asset Tool  –  Termux Edition{C.M}               ║
 ╠══════════════════════════════════════════════════════╣
 ║  {C.C}input/{C.M}   ← .assetbundle gốc                          ║
-║  {C.C}output/{C.M}  ← OBJ xuất/chỉnh sửa tại đây               ║
-║  {C.C}osave/{C.M}   ← bundle sau import                         ║
+║  {C.C}output/{C.M}  ← asset xuất / chỉnh sửa                    ║
+║  {C.C}osave/{C.M}   ← bundle sau khi import                      ║
 ╚══════════════════════════════════════════════════════╝{C.X}""")
 
+
 def print_status():
-    nb = len(scan_bundles(DIR_INPUT))
-    no = len([f for f in os.listdir(DIR_OUTPUT) if f.endswith(".obj")])
+    nb = len(AT.scan_bundles(DIR_INPUT))
+    no = len([f for f in os.listdir(DIR_OUTPUT)
+              if os.path.isfile(os.path.join(DIR_OUTPUT, f))])
     ns = len(os.listdir(DIR_OSAVE))
-    print(f"  {C.D}input:{nb} bundle  output:{no} obj  osave:{ns} file{C.X}\n")
+    print(f"  {C.D}input:{nb} bundle   output:{no} file   "
+          f"osave:{ns} file{C.X}\n")
+
 
 def interactive_menu():
     print_banner()
     while True:
         print_status()
-        print(f"  {C.G}1{C.X}  Export Mesh  (bundle → OBJ)")
-        print(f"  {C.G}2{C.X}  Import Mesh  (OBJ → bundle)")
-        print(f"  {C.G}3{C.X}  List Mesh")
+        print(f"  {C.G}1{C.X}  Liệt kê asset  (List)")
+        print(f"  {C.G}2{C.X}  Export asset   (bundle → output/)")
+        print(f"  {C.G}3{C.X}  Import asset   (output/ → osave/)")
+        print(f"  {C.G}4{C.X}  Cài đặt")
         print(f"  {C.R}0{C.X}  Thoát\n")
-        try:
-            ch = input(f"  {C.Y}Chọn:{C.X} ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nThoát."); break
-        if   ch == "1": do_export()
-        elif ch == "2": do_import()
-        elif ch == "3": do_list()
-        elif ch == "0": print("Thoát."); break
-        else: warn("Lựa chọn không hợp lệ.")
+        ch = ask("Chọn:")
+        if ch == "1":
+            do_list()
+        elif ch == "2":
+            export_menu()
+        elif ch == "3":
+            do_import()
+        elif ch == "4":
+            settings_menu()
+        elif ch in ("0", ""):
+            print("Thoát.")
+            break
+        else:
+            warn("Lựa chọn không hợp lệ.")
+
 
 def main():
     args = sys.argv[1:]
-    if not args: interactive_menu()
-    elif args[0].lower() in ("export","e","-e"): do_export()
-    elif args[0].lower() in ("import","i","-i"): do_import()
-    elif args[0].lower() in ("list","l","-l"):   do_list()
-    elif args[0].lower() in ("--no-scale","-ns"):
-        global AUTO_SCALE; AUTO_SCALE=False
+    if not args:
+        interactive_menu()
+        return
+    cmd = args[0].lower()
+    if cmd in ("list", "l", "-l"):
+        do_list()
+    elif cmd in ("export", "e", "-e"):
+        do_export()
+    elif cmd in ("import", "i", "-i"):
+        do_import()
+    elif cmd in ("--no-scale", "-ns"):
+        global AUTO_SCALE
+        AUTO_SCALE = False
         print("  Auto-scale OFF")
-        if len(args)>1:
-            if args[1].lower() in ("import","i"): do_import()
-    else: print("Usage: python mesh_cli.py [export|import|list]"); sys.exit(1)
+        if len(args) > 1 and args[1].lower() in ("import", "i"):
+            do_import()
+    else:
+        print("Usage: python main.py [list|export|import]")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

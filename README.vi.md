@@ -62,6 +62,48 @@ Công cụ giao diện người dùng (GUI) này là sản phẩm phát triển 
 
 ---
 
+## 📱 Chạy trên Termux (Android)
+
+Ngoài bản GUI cho Windows, dự án có **AOV Asset Tool** — công cụ dòng lệnh
+(CLI) chạy thẳng trên **Termux Android**, không cần màn hình đồ hoạ.
+
+### Cài đặt
+
+```bash
+pkg install python
+pip install -r requirements_termux.txt
+```
+
+> Bundle AOV mã hoá bằng SM4 — tool đã có sẵn SM4 thuần Python dự phòng nên
+> **không bắt buộc** cài package `sm4`.
+
+### Sử dụng
+
+```bash
+python main.py            # menu tương tác
+python main.py list       # liệt kê toàn bộ asset trong input/
+python main.py export     # xuất tất cả asset ra output/
+python main.py import     # nhập lại & đóng gói bundle vào osave/
+```
+
+### Quy trình mod
+
+1. Chép `.assetbundle` gốc vào thư mục `input/`
+2. `python main.py export` — asset xuất ra `output/` theo định dạng:
+   - **Texture2D / Sprite** → `.png`
+   - **Mesh** → `.obj`
+   - **TextAsset** → `.txt` / `.bin`
+   - **AudioClip** → `.wav` / `.ogg`
+   - **AnimationClip** và mọi loại khác → `.json` (typetree, kiểu UABE dump)
+3. Chỉnh sửa file trong `output/` (giữ nguyên tên file để tool nhận diện)
+4. `python main.py import` — bundle đã mod lưu tại `osave/`
+5. Chép bundle trong `osave/` đè vào game để áp dụng mod
+
+> ⚠️ Quy ước tên file `{bundle}__{loại}__{tên}__{pathID}.{đuôi}` được dùng để
+> ghép asset trở lại đúng bundle — đừng đổi tên file đã xuất.
+
+---
+
 ## 🎯 Tính năng cốt lõi
 
 <table>
@@ -199,10 +241,11 @@ J --> I
 |---------|------|---------|
 | **Texture2D** | Tài nguyên 2D | ✅ Xuất / ✅ Nhập / ✅ Xem |
 | **Sprite** | Đồ họa sprite | ✅ Xuất / ✅ Nhập |
-| **Mesh** | Lưới 3D | ✅ Xuất / ✅ Xem |
+| **Mesh** | Lưới 3D | ✅ Xuất / ✅ Nhập (OBJ) / ✅ Xem |
 | **TextAsset** | Tệp văn bản | ✅ Xuất / ✅ Nhập |
-| **AnimationClip** | Clip hoạt ảnh | ✅ Xuất |
+| **AnimationClip** | Clip hoạt ảnh | ✅ Xuất / ✅ Nhập (JSON) |
 | **AudioClip** | Tài nguyên âm thanh | ✅ Xuất |
+| **Mọi loại khác** | Bất kỳ asset nào | ✅ Xuất / ✅ Nhập (JSON typetree / RAW) |
 | **Material** | Vật liệu | ✅ Xem |
 | **Shader** | Shader | ✅ Xem |
 

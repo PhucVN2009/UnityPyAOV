@@ -4,7 +4,11 @@ from ..streams import EndianBinaryReader
 try:
     from sm4 import SM4Key
 except ImportError:
-    SM4Key = None
+    # Fallback: SM4 thuần Python (Termux/Android không build được package sm4)
+    try:
+        from .sm4_pure import SM4Key
+    except ImportError:
+        SM4Key = None
 
 class ArchiveStorageDecryptor:
     unknown_1: int

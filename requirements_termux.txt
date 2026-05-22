@@ -5,12 +5,20 @@
 # Nếu lỗi "error: externally-managed-environment":
 #   pip install -r requirements_termux.txt --break-system-packages
 
-# BẮT BUỘC (cho Mesh import/export)
-lz4
+# ── BẮT BUỘC ─────────────────────────────────────────
+lz4               # giải nén bundle (lz4)
+tabulate          # cần cho TypeTreeHelper
+pycryptodome      # giải mã AES cho bundle AOV
 
-# CẦN nếu bundle dùng brotli compression
-brotli
+# ── TEXTURE (export/import PNG) ───────────────────────
+Pillow            # đọc/ghi ảnh
+texture2ddecoder  # giải mã ETC/ASTC/DXT... -> PNG
+etcpak            # mã hoá lại ETC/DXT khi import texture
 
-# CẦN nếu bundle AOV bị encrypt (sm4/AES)
-sm4
-pycryptodome
+# ── TUỲ CHỌN ──────────────────────────────────────────
+brotli            # chỉ cần nếu bundle dùng brotli compression
+numpy             # tăng tốc import Mesh (có fallback nếu thiếu)
+
+# sm4: KHÔNG bắt buộc nữa — tool đã có SM4 thuần Python dự phòng
+#      (sm4_pure.py). Chỉ cài nếu muốn nhanh hơn:
+# sm4
