@@ -1,0 +1,16 @@
+# requirements_termux.txt
+# Cài đặt trên Termux:
+#   pip install -r requirements_termux.txt
+#
+# Nếu lỗi "error: externally-managed-environment":
+#   pip install -r requirements_termux.txt --break-system-packages
+
+# BẮT BUỘC (cho Mesh import/export)
+lz4
+
+# CẦN nếu bundle dùng brotli compression
+brotli
+
+# CẦN nếu bundle AOV bị encrypt (sm4/AES)
+sm4
+pycryptodome
