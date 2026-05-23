@@ -40,6 +40,8 @@ for d in (DIR_INPUT, DIR_OUTPUT, DIR_OSAVE):
 # Cấu hình runtime
 AUTO_SCALE = True       # tự normalize scale khi import mesh khác game
 FORCE_RGBA32 = False    # ép texture về RGBA32 (an toàn, nhưng nặng hơn)
+KNN_K = 4               # số neighbor blend bone-weight (chống "model dị")
+                        # 1=nearest cũ, 4=mượt (mặc định), 8=cực mượt/chậm
 
 
 # ── ANSI colours ─────────────────────────────────────
@@ -259,6 +261,7 @@ def do_import():
             success, msg = AT.import_file(
                 obj, filepath, ext,
                 auto_scale=AUTO_SCALE, force_rgba32=FORCE_RGBA32,
+                knn_k=KNN_K,
             )
             if success:
                 ok(f"  {name}  ({msg})  {time.time() - t0:.1f}s")
@@ -290,22 +293,34 @@ def do_import():
 #  SETTINGS
 # ═══════════════════════════════════════════════════════
 def settings_menu():
-    global AUTO_SCALE, FORCE_RGBA32
+    global AUTO_SCALE, FORCE_RGBA32, KNN_K
     head("CÀI ĐẶT")
     print(f"  {C.G}1{C.X}  Auto-scale mesh khi import : "
           f"{C.G if AUTO_SCALE else C.R}{'BẬT' if AUTO_SCALE else 'TẮT'}{C.X}")
     print(f"  {C.G}2{C.X}  Ép texture về RGBA32       : "
           f"{C.G if FORCE_RGBA32 else C.R}{'BẬT' if FORCE_RGBA32 else 'TẮT'}{C.X}")
+    print(f"  {C.G}3{C.X}  Weight blend k (chống dị)  : "
+          f"{C.G}k={KNN_K}{C.X}")
     print(f"  {C.R}0{C.X}  Quay lại\n")
     print(f"  {C.D}Auto-scale: chuẩn hoá kích thước khi thay model khác game.{C.X}")
-    print(f"  {C.D}RGBA32: không mất chất lượng nhưng bundle nặng hơn.{C.X}\n")
-    ch = ask("Chọn để bật/tắt:")
+    print(f"  {C.D}RGBA32: không mất chất lượng nhưng bundle nặng hơn.{C.X}")
+    print(f"  {C.D}k weight: 1=cứng (nhanh, dễ dị), 4=mượt (mặc định),{C.X}")
+    print(f"  {C.D}          8=cực mượt cho mesh ngoài rất khác topology.{C.X}\n")
+    ch = ask("Chọn để chỉnh:")
     if ch == "1":
         AUTO_SCALE = not AUTO_SCALE
         info(f"Auto-scale = {AUTO_SCALE}")
     elif ch == "2":
         FORCE_RGBA32 = not FORCE_RGBA32
         info(f"Force RGBA32 = {FORCE_RGBA32}")
+    elif ch == "3":
+        val = ask("Nhập k (1-16, mặc định 4):")
+        try:
+            k = int(val)
+            KNN_K = max(1, min(16, k))
+            info(f"Weight blend k = {KNN_K}")
+        except ValueError:
+            warn("Giá trị không hợp lệ.")
 
 
 # ═══════════════════════════════════════════════════════

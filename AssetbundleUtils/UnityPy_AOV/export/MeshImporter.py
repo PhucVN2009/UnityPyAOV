@@ -164,69 +164,149 @@ def _normalize_to_bbox(src_verts, ref_verts):
 # ═══════════════════════════════════════════════
 
 def _transfer_weights(orig_verts, orig_skin, lookup_verts, new_vc,
-                      max_bone_idx, progress_cb=None):
+                      max_bone_idx, progress_cb=None, knn_k=4):
+    """k-NN inverse-distance weight blending – chống "model dị" khi mod
+    mesh từ game khác.
+
+    Mỗi vertex mới lấy `knn_k` vertex gốc gần nhất, blend bone weights
+    theo trọng số tỉ lệ nghịch khoảng cách:
+        - k=1: nearest-vertex copy (cũ; nhanh nhưng dễ snap cứng)
+        - k=4 (mặc định): blend mượt, khớp anim tốt hơn
+        - k=8: cực mượt, chậm hơn nhưng tốt cho mesh chênh lệch topology
+    """
     from ..classes.Mesh import BoneWeights4
     orig_vc = len(orig_skin)
-    if orig_vc == 0: return [BoneWeights4() for _ in range(new_vc)]
+    if orig_vc == 0:
+        return [BoneWeights4() for _ in range(new_vc)]
+    knn_k = max(1, min(knn_k, orig_vc))
+
+    # Pack weight/index gốc thành flat array để truy cập nhanh
+    flat_w = [0.0] * (orig_vc * 4)
+    flat_b = [0] * (orig_vc * 4)
+    for i, s in enumerate(orig_skin):
+        for slot in range(4):
+            flat_w[i * 4 + slot] = float(s.weight[slot])
+            flat_b[i * 4 + slot] = min(max(int(s.boneIndex[slot]), 0),
+                                       max_bone_idx)
+
     if _HAS_NUMPY:
-        nearest = _nearest_numpy(orig_verts, lookup_verts, orig_vc, new_vc, progress_cb)
+        knn = _knn_numpy(orig_verts, lookup_verts, orig_vc, new_vc,
+                         knn_k, progress_cb)
     else:
-        nearest = _nearest_bisect(orig_verts, lookup_verts, orig_vc, new_vc, progress_cb)
+        knn = _knn_bisect(orig_verts, lookup_verts, orig_vc, new_vc,
+                          knn_k, progress_cb)
+
     result = []
-    for src_i in nearest:
-        src = orig_skin[src_i]; bw = BoneWeights4()
-        raw_w = list(src.weight)
-        raw_b = [min(max(int(b), 0), max_bone_idx) for b in src.boneIndex]
-        total = sum(raw_w)
-        if total > 1e-6: raw_w = [w/total for w in raw_w]
-        else: raw_w = [1.0,0.0,0.0,0.0]
-        bw.weight = raw_w; bw.boneIndex = raw_b
+    for nbrs in knn:
+        # Gộp weight từ k neighbor theo inverse distance
+        agg = {}
+        for src_i, d2 in nbrs:
+            iw = 1.0 / (d2 + 1e-10)
+            base = src_i * 4
+            for slot in range(4):
+                w = flat_w[base + slot]
+                if w <= 0.0:
+                    continue
+                b = flat_b[base + slot]
+                agg[b] = agg.get(b, 0.0) + w * iw
+
+        # Top-4 bone theo trọng số tổng hợp
+        top = sorted(agg.items(), key=lambda x: -x[1])[:4]
+        ws = [w for _, w in top]
+        bs = [b for b, _ in top]
+        while len(ws) < 4:
+            ws.append(0.0); bs.append(0)
+        tot = sum(ws)
+        if tot > 1e-6:
+            ws = [w / tot for w in ws]
+        else:
+            ws = [1.0, 0.0, 0.0, 0.0]
+
+        bw = BoneWeights4()
+        bw.weight = ws
+        bw.boneIndex = bs
         result.append(bw)
     return result
 
 
-def _nearest_numpy(orig_verts, new_verts, orig_vc, new_vc, progress_cb):
-    ov = np.array(orig_verts,dtype=np.float32).reshape(orig_vc,3)
+def _knn_numpy(orig_verts, new_verts, orig_vc, new_vc, k, progress_cb):
+    """Vector hoá: với mỗi vertex mới, lấy k orig vertex có d² nhỏ nhất."""
+    ov = np.array(orig_verts, dtype=np.float32).reshape(orig_vc, 3)
     nv = np.array(new_verts, dtype=np.float32).reshape(new_vc, 3)
-    BATCH=512; indices=[]
+    BATCH = 256
+    out = []
     for start in range(0, new_vc, BATCH):
-        b=nv[start:start+BATCH]
-        d=(b[:,None,:]-ov[None,:,:])
-        indices.extend(((d*d).sum(axis=2)).argmin(axis=1).tolist())
-        if progress_cb: progress_cb(min(start+BATCH,new_vc),new_vc)
-    return indices
+        b = nv[start:start + BATCH]
+        # (B, ovc) ma trận khoảng cách bình phương
+        d2 = ((b[:, None, :] - ov[None, :, :]) ** 2).sum(axis=2)
+        k_eff = min(k, d2.shape[1])
+        k_idx = np.argpartition(d2, k_eff - 1, axis=1)[:, :k_eff]
+        for qi in range(b.shape[0]):
+            idxs = k_idx[qi]
+            dists = d2[qi, idxs]
+            ord_q = np.argsort(dists)
+            out.append([(int(idxs[j]), float(dists[j])) for j in ord_q])
+        if progress_cb:
+            progress_cb(min(start + BATCH, new_vc), new_vc)
+    return out
 
 
-def _nearest_bisect(orig_verts, new_verts, orig_vc, new_vc, progress_cb):
-    order=sorted(range(orig_vc),key=lambda i:orig_verts[i*3])
-    xs=[orig_verts[order[i]*3] for i in range(orig_vc)]
-    REPORT=max(1,new_vc//20); result=[]
+def _knn_bisect(orig_verts, new_verts, orig_vc, new_vc, k, progress_cb):
+    """Pure-Python: bisect tìm anchor x, mở rộng 2 phía + prune theo dx²."""
+    import heapq
+    order = sorted(range(orig_vc), key=lambda i: orig_verts[i * 3])
+    xs = [orig_verts[order[i] * 3] for i in range(orig_vc)]
+    REPORT = max(1, new_vc // 20)
+    out = []
     for qi in range(new_vc):
-        nx=new_verts[qi*3]; ny=new_verts[qi*3+1]; nz=new_verts[qi*3+2]
-        lo=bisect.bisect_left(xs,nx)
-        j=order[lo] if lo<orig_vc else order[orig_vc-1]
-        dx_=orig_verts[j*3]-nx; dy_=orig_verts[j*3+1]-ny; dz_=orig_verts[j*3+2]-nz
-        bd=dx_*dx_+dy_*dy_+dz_*dz_; bj=j; r=lo+1; l=lo-1
-        while True:
-            adv=False
-            if r<orig_vc:
-                dx=xs[r]-nx
-                if dx*dx<bd:
-                    j=order[r]; dy_=orig_verts[j*3+1]-ny; dz_=orig_verts[j*3+2]-nz
-                    d2=dx*dx+dy_*dy_+dz_*dz_
-                    if d2<bd: bd=d2; bj=j
-                    r+=1; adv=True
-            if l>=0:
-                dx=nx-xs[l]
-                if dx*dx<bd:
-                    j=order[l]; dy_=orig_verts[j*3+1]-ny; dz_=orig_verts[j*3+2]-nz
-                    d2=dx*dx+dy_*dy_+dz_*dz_
-                    if d2<bd: bd=d2; bj=j
-                    l-=1; adv=True
-            if not adv: break
-        result.append(bj)
-        if progress_cb and qi%REPORT==0: progress_cb(qi,new_vc)
-    return result
+        nx = new_verts[qi * 3]
+        ny = new_verts[qi * 3 + 1]
+        nz = new_verts[qi * 3 + 2]
+        anchor = bisect.bisect_left(xs, nx)
+        heap = []  # max-heap: (-d2, src_i); top = lớn nhất trong k tốt nhất
+        l = anchor - 1
+        r = anchor
+        while l >= 0 or r < orig_vc:
+            worst = -heap[0][0] if len(heap) >= k else float("inf")
+            adv = False
+            if r < orig_vc:
+                dx = xs[r] - nx
+                if dx * dx < worst:
+                    j = order[r]
+                    dy = orig_verts[j * 3 + 1] - ny
+                    dz = orig_verts[j * 3 + 2] - nz
+                    d2 = dx * dx + dy * dy + dz * dz
+                    if len(heap) < k:
+                        heapq.heappush(heap, (-d2, j))
+                    elif d2 < -heap[0][0]:
+                        heapq.heapreplace(heap, (-d2, j))
+                    r += 1
+                    adv = True
+                else:
+                    r = orig_vc  # prune bên phải
+            if l >= 0:
+                worst = -heap[0][0] if len(heap) >= k else float("inf")
+                dx = nx - xs[l]
+                if dx * dx < worst:
+                    j = order[l]
+                    dy = orig_verts[j * 3 + 1] - ny
+                    dz = orig_verts[j * 3 + 2] - nz
+                    d2 = dx * dx + dy * dy + dz * dz
+                    if len(heap) < k:
+                        heapq.heappush(heap, (-d2, j))
+                    elif d2 < -heap[0][0]:
+                        heapq.heapreplace(heap, (-d2, j))
+                    l -= 1
+                    adv = True
+                else:
+                    l = -1  # prune bên trái
+            if not adv:
+                break
+        nbrs = sorted([(i, -nd2) for nd2, i in heap], key=lambda x: x[1])
+        out.append(nbrs)
+        if progress_cb and qi % REPORT == 0:
+            progress_cb(qi, new_vc)
+    return out
 
 
 # ═══════════════════════════════════════════════
@@ -524,7 +604,8 @@ def _serialize_mesh(mesh):
 #  MAIN ENTRY POINT
 # ═══════════════════════════════════════════════
 
-def import_obj_to_mesh(obj_reader, filepath, progress_cb=None, auto_scale=True):
+def import_obj_to_mesh(obj_reader, filepath, progress_cb=None,
+                       auto_scale=True, knn_k=4):
     """
     Import .obj → Unity Mesh.
 
@@ -603,7 +684,8 @@ def import_obj_to_mesh(obj_reader, filepath, progress_cb=None, auto_scale=True):
     else:
         # Different count: weight transfer
         algo = "numpy" if _HAS_NUMPY else "bisect"
-        print(f"    [weight transfer {orig_vc}→{new_vc}, algo={algo}, bones={bone_count}]")
+        print(f"    [weight transfer {orig_vc}→{new_vc}, algo={algo}, "
+              f"k={knn_k}, bones={bone_count}]")
 
         # Normalize CHỈ để tìm nearest vertex (weight lookup)
         # KHÔNG áp dụng lên vertex data
@@ -613,7 +695,7 @@ def import_obj_to_mesh(obj_reader, filepath, progress_cb=None, auto_scale=True):
 
         new_skin = _transfer_weights(
             orig_verts, orig_skin, lookup_verts, new_vc,
-            max_bone_idx, progress_cb)
+            max_bone_idx, progress_cb, knn_k=knn_k)
 
         # Dùng vertices gốc (không scale) cho VertexData
         mesh._new_vd_bytes = _build_full_vertex_data(
