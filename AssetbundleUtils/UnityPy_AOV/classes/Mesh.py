@@ -371,6 +371,7 @@ class Mesh(NamedObject):
         self.m_Indices = []
         self.m_BindPose = []
         self.m_BoneNameHashes = []
+        self.m_VertexCount = 0
         self.m_Vertices = []
         self.m_Skin = []
         self.m_Normals = []
@@ -531,13 +532,26 @@ class Mesh(NamedObject):
 
         # Fix channel after 2018.3
         version = self.version
+        # Các bước dưới chỉ xử lý dữ liệu đã đọc xong khỏi stream nên có thể
+        # bọc try/except an toàn — Mesh vẫn dựng được dù giải mã hình học lỗi,
+        # tránh "parse thất bại" cho cả object.
+        self.parse_warnings = []
         if version >= (3, 5):  # 3.5 and up
-            self.ReadVertexData()
+            try:
+                self.ReadVertexData()
+            except Exception as e:
+                self.parse_warnings.append(f"ReadVertexData: {e}")
 
         if version >= (2, 6):  # 2.6.0 and later
-            self.DecompressCompressedMesh()
+            try:
+                self.DecompressCompressedMesh()
+            except Exception as e:
+                self.parse_warnings.append(f"DecompressCompressedMesh: {e}")
 
-        self.GetTriangles()
+        try:
+            self.GetTriangles()
+        except Exception as e:
+            self.parse_warnings.append(f"GetTriangles: {e}")
 
     def ReadVertexData(self):
         version = self.version
@@ -838,7 +852,10 @@ class Mesh(NamedObject):
                 # de-stripify :
                 triIndex = 0
                 for i in range(indexCount - 2):
-                    a, b, c = m_IndexBuffer[firstIndex + i : firstIndex + i + 3]
+                    tri = m_IndexBuffer[firstIndex + i : firstIndex + i + 3]
+                    if len(tri) < 3:  # guard buffer ngắn
+                        break
+                    a, b, c = tri
 
                     # skip degenerates
                     if a == b or a == c or b == c:
@@ -852,6 +869,8 @@ class Mesh(NamedObject):
 
             elif topology == GfxPrimitiveType.kPrimitiveQuads:
                 for q in range(0, indexCount, 4):
+                    if firstIndex + q + 3 >= len(m_IndexBuffer):  # guard buffer ngắn
+                        break
                     m_Indices.extend(
                         [
                             m_IndexBuffer[firstIndex + q],
@@ -969,6 +988,31 @@ class MeshHelper:
                 max(((x - 32768) / 32767.0), -1.0)
                 for x in struct.unpack(f">{'h'*(len(inputBytes)//2)}", inputBytes)
             ]
+        elif vformat in (
+            VertexFormat.kVertexFormatUInt8,
+            VertexFormat.kVertexFormatSInt8,
+        ):
+            return [float(b) for b in inputBytes]
+        elif vformat in (
+            VertexFormat.kVertexFormatUInt16,
+            VertexFormat.kVertexFormatSInt16,
+        ):
+            code = "H" if vformat == VertexFormat.kVertexFormatUInt16 else "h"
+            return [
+                float(x)
+                for x in struct.unpack(f">{code*(len(inputBytes)//2)}", inputBytes)
+            ]
+        elif vformat in (
+            VertexFormat.kVertexFormatUInt32,
+            VertexFormat.kVertexFormatSInt32,
+        ):
+            code = "I" if vformat == VertexFormat.kVertexFormatUInt32 else "i"
+            return [
+                float(x)
+                for x in struct.unpack(f">{code*(len(inputBytes)//4)}", inputBytes)
+            ]
+        # định dạng lạ -> trả mảng rỗng thay vì None để không gây lỗi ngầm
+        return []
 
     @staticmethod
     def BytesToIntArray(inputBytes, size):
@@ -982,6 +1026,7 @@ class MeshHelper:
             return [
                 x for x in struct.unpack(f">{'i'*(len(inputBytes)//4)}", inputBytes)
             ]
+        return []
 
     @staticmethod
     def ToVertexFormat(format: int, version: List[int]) -> "VertexFormat":

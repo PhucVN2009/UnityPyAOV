@@ -196,24 +196,64 @@ def export_object(obj, bundle_name, out_dir, mode="auto"):
 
     try:
         if mode == "raw":
-            return _export_raw(obj, bundle_name, type_name, asset_name, out_dir)
+            return _safe_call(_export_raw, obj, bundle_name, type_name,
+                              asset_name, out_dir)
         if mode == "json":
-            return _export_json(obj, bundle_name, type_name, asset_name, out_dir)
+            ok, fp = _safe_call(_export_json, obj, bundle_name, type_name,
+                                asset_name, out_dir)
+            if ok:
+                return True, fp
+            # JSON typetree thất bại -> rớt xuống RAW
+            return _safe_call(_export_raw, obj, bundle_name, type_name,
+                              asset_name, out_dir)
 
-        # mode auto
+        # ── mode "auto": cascade native -> JSON typetree -> RAW ─────
+        ok, result = False, ""
         if type_name in MESH_TYPES:
-            return _export_mesh(obj, data, bundle_name, asset_name, out_dir)
-        if type_name in TEXTURE_TYPES:
-            return _export_texture(obj, data, bundle_name, type_name,
-                                   asset_name, out_dir)
-        if type_name in TEXT_TYPES:
-            return _export_text(obj, data, bundle_name, asset_name, out_dir)
-        if type_name in AUDIO_TYPES:
-            return _export_audio(obj, data, bundle_name, asset_name, out_dir)
-        # AnimationClip + còn lại -> typetree JSON
-        return _export_json(obj, bundle_name, type_name, asset_name, out_dir)
+            ok, result = _safe_call(_export_mesh, obj, data, bundle_name,
+                                    asset_name, out_dir)
+        elif type_name in TEXTURE_TYPES:
+            ok, result = _safe_call(_export_texture, obj, data, bundle_name,
+                                    type_name, asset_name, out_dir)
+        elif type_name in TEXT_TYPES:
+            ok, result = _safe_call(_export_text, obj, data, bundle_name,
+                                    asset_name, out_dir)
+        elif type_name in AUDIO_TYPES:
+            ok, result = _safe_call(_export_audio, obj, data, bundle_name,
+                                    asset_name, out_dir)
+        if ok:
+            return True, result
+
+        # Fallback 1: JSON typetree (chạy cho hầu hết mọi class hợp lệ)
+        ok2, fp2 = _safe_call(_export_json, obj, bundle_name, type_name,
+                              asset_name, out_dir)
+        if ok2:
+            return True, fp2
+
+        # Fallback cuối: RAW (.dat) – luôn thành công, bảo toàn nguyên byte
+        ok3, fp3 = _safe_call(_export_raw, obj, bundle_name, type_name,
+                              asset_name, out_dir)
+        if ok3:
+            return True, fp3
+
+        # Cả 3 lớp đều fail -> trả lý do lớp đầu tiên
+        return False, result or fp2 or fp3 or f"{type_name} id={path_id}: lỗi không xác định"
     except Exception as e:
-        return False, f"{type_name} id={path_id}: {e}"
+        # Bắt sót — vẫn cố bảo toàn bằng RAW
+        try:
+            return _safe_call(_export_raw, obj, bundle_name, type_name,
+                              asset_name, out_dir)
+        except Exception:
+            return False, f"{type_name} id={path_id}: {e}"
+
+
+def _safe_call(fn, *args, **kwargs):
+    """Gọi exporter trong môi trường im lặng, không bao giờ ném exception."""
+    try:
+        with _quiet():
+            return fn(*args, **kwargs)
+    except Exception as e:
+        return False, f"{fn.__name__}: {e}"
 
 
 def _write(out_dir, fname, data, binary=True):
@@ -302,22 +342,48 @@ def import_file(obj, filepath, ext, auto_scale=True, force_rgba32=False):
     """
     Nhập 1 file vào object. Trả về (ok: bool, thông_báo: str).
     Định dạng được suy ra từ ext.
+
+    Cơ chế fallback: nếu import theo class (texture/mesh/text) thất bại,
+    thử tự động JSON typetree hoặc RAW (.dat) cùng tên (nếu user đã xuất
+    sẵn bằng các fallback đó), để asset vẫn được mod thay vì bỏ qua.
     """
     ext = ext.lower()
     try:
-        if ext in ("png", "jpg", "jpeg", "bmp", "tga"):
-            return _import_texture(obj, filepath, force_rgba32)
-        if ext == "obj":
-            return _import_mesh(obj, filepath, auto_scale)
-        if ext == "json":
-            return _import_json(obj, filepath)
-        if ext in ("txt", "bin"):
-            return _import_text(obj, filepath)
-        if ext == "dat":
-            return _import_raw(obj, filepath)
-        return False, f"Không hỗ trợ import định dạng .{ext}"
+        with _quiet():
+            if ext in ("png", "jpg", "jpeg", "bmp", "tga"):
+                ok, msg = _import_texture(obj, filepath, force_rgba32)
+            elif ext == "obj":
+                ok, msg = _import_mesh(obj, filepath, auto_scale)
+            elif ext == "json":
+                ok, msg = _import_json(obj, filepath)
+            elif ext in ("txt", "bin"):
+                ok, msg = _import_text(obj, filepath)
+            elif ext == "dat":
+                ok, msg = _import_raw(obj, filepath)
+            else:
+                ok, msg = False, f"Không hỗ trợ import định dạng .{ext}"
+        if ok:
+            return True, msg
     except Exception as e:
-        return False, f"{e}\n{traceback.format_exc()}"
+        msg = str(e).splitlines()[0]
+
+    # Import gốc lỗi -> thử file fallback cùng pathid trong cùng thư mục
+    folder = os.path.dirname(filepath)
+    pid = str(obj.path_id)
+    for cand_ext in ("json", "dat"):
+        if cand_ext == ext:
+            continue
+        for f in os.listdir(folder):
+            if not f.endswith(f"__{pid}.{cand_ext}"):
+                continue
+            try:
+                with _quiet():
+                    if cand_ext == "json":
+                        return _import_json(obj, os.path.join(folder, f))
+                    return _import_raw(obj, os.path.join(folder, f))
+            except Exception:
+                pass
+    return False, msg
 
 
 def _import_texture(obj, filepath, force_rgba32):

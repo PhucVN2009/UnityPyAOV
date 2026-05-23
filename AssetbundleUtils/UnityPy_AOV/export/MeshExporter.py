@@ -22,6 +22,10 @@ def export_mesh_obj(m_Mesh, material_names: list = None):
     if len(m_Mesh.m_Vertices) == m_Mesh.m_VertexCount * 4:
         c = 4
 
+    # Mesh giải mã lỗi -> mảng vertex ngắn hơn kỳ vọng: bỏ qua để fallback
+    if len(m_Mesh.m_Vertices) < int(m_Mesh.m_VertexCount) * c:
+        return False
+
     for v in range(int(m_Mesh.m_VertexCount)):
         sb.append(
             "v {0:.7G} {1:.7G} {2:.7G}\r\n".format(
@@ -73,6 +77,8 @@ def export_mesh_obj(m_Mesh, material_names: list = None):
         indexCount = m_Mesh.m_SubMeshes[i].indexCount
         end = sum + indexCount // 3
         for f in range(sum, end):
+            if f * 3 + 2 >= len(m_Mesh.m_Indices):  # guard index ngắn
+                break
             sb.append(
                 "f {0}/{0}/{0} {1}/{1}/{1} {2}/{2}/{2}\r\n".format(
                     m_Mesh.m_Indices[f * 3 + 2] + 1,
