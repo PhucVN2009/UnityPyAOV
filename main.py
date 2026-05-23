@@ -42,6 +42,10 @@ AUTO_SCALE = True       # tự normalize scale khi import mesh khác game
 FORCE_RGBA32 = False    # ép texture về RGBA32 (an toàn, nhưng nặng hơn)
 KNN_K = 4               # số neighbor blend bone-weight (chống "model dị")
                         # 1=nearest cũ, 4=mượt (mặc định), 8=cực mượt/chậm
+OBJ_SOURCE = "aov"      # "aov" = OBJ do tool này export (đã flip X+đảo winding)
+                        # "external" = OBJ Blender/3DS/Maya thuần
+OBJ_ROTATE_Y = 0        # xoay quanh trục Y khi import: 0/90/180/270
+OBJ_SWAP_YZ = False     # nguồn Z-up (đa số Blender Y-up nên để False)
 
 
 # ── ANSI colours ─────────────────────────────────────
@@ -262,6 +266,9 @@ def do_import():
                 obj, filepath, ext,
                 auto_scale=AUTO_SCALE, force_rgba32=FORCE_RGBA32,
                 knn_k=KNN_K,
+                obj_source=OBJ_SOURCE,
+                rotate_y_deg=OBJ_ROTATE_Y,
+                swap_yz=OBJ_SWAP_YZ,
             )
             if success:
                 ok(f"  {name}  ({msg})  {time.time() - t0:.1f}s")
@@ -294,6 +301,7 @@ def do_import():
 # ═══════════════════════════════════════════════════════
 def settings_menu():
     global AUTO_SCALE, FORCE_RGBA32, KNN_K
+    global OBJ_SOURCE, OBJ_ROTATE_Y, OBJ_SWAP_YZ
     head("CÀI ĐẶT")
     print(f"  {C.G}1{C.X}  Auto-scale mesh khi import : "
           f"{C.G if AUTO_SCALE else C.R}{'BẬT' if AUTO_SCALE else 'TẮT'}{C.X}")
@@ -301,11 +309,20 @@ def settings_menu():
           f"{C.G if FORCE_RGBA32 else C.R}{'BẬT' if FORCE_RGBA32 else 'TẮT'}{C.X}")
     print(f"  {C.G}3{C.X}  Weight blend k (chống dị)  : "
           f"{C.G}k={KNN_K}{C.X}")
+    print(f"  {C.G}4{C.X}  Nguồn OBJ (mode)           : "
+          f"{C.G}{OBJ_SOURCE}{C.X}")
+    print(f"  {C.G}5{C.X}  Xoay quanh trục Y          : "
+          f"{C.G}{OBJ_ROTATE_Y}°{C.X}")
+    print(f"  {C.G}6{C.X}  Hoán đổi Y↔Z (Z-up source) : "
+          f"{C.G if OBJ_SWAP_YZ else C.R}{'BẬT' if OBJ_SWAP_YZ else 'TẮT'}{C.X}")
     print(f"  {C.R}0{C.X}  Quay lại\n")
     print(f"  {C.D}Auto-scale: chuẩn hoá kích thước khi thay model khác game.{C.X}")
     print(f"  {C.D}RGBA32: không mất chất lượng nhưng bundle nặng hơn.{C.X}")
-    print(f"  {C.D}k weight: 1=cứng (nhanh, dễ dị), 4=mượt (mặc định),{C.X}")
-    print(f"  {C.D}          8=cực mượt cho mesh ngoài rất khác topology.{C.X}\n")
+    print(f"  {C.D}k weight: 1=cứng (nhanh, dễ dị), 4=mượt, 8=cực mượt.{C.X}")
+    print(f"  {C.D}Nguồn OBJ: 'aov' cho OBJ export bằng tool này;{C.X}")
+    print(f"  {C.D}           'external' cho OBJ từ Blender/3DS/Maya thuần.{C.X}")
+    print(f"  {C.D}Xoay Y: dùng 180° nếu nhân vật quay mặt ngược chiều.{C.X}")
+    print(f"  {C.D}Y↔Z: bật nếu OBJ ngoài là Z-up (vd Maya/3DS export gốc).{C.X}\n")
     ch = ask("Chọn để chỉnh:")
     if ch == "1":
         AUTO_SCALE = not AUTO_SCALE
@@ -316,11 +333,27 @@ def settings_menu():
     elif ch == "3":
         val = ask("Nhập k (1-16, mặc định 4):")
         try:
-            k = int(val)
-            KNN_K = max(1, min(16, k))
+            KNN_K = max(1, min(16, int(val)))
             info(f"Weight blend k = {KNN_K}")
         except ValueError:
             warn("Giá trị không hợp lệ.")
+    elif ch == "4":
+        OBJ_SOURCE = "external" if OBJ_SOURCE == "aov" else "aov"
+        info(f"Nguồn OBJ = {OBJ_SOURCE}")
+    elif ch == "5":
+        val = ask("Góc xoay quanh Y (0/90/180/270):")
+        try:
+            v = int(val) % 360
+            if v in (0, 90, 180, 270):
+                OBJ_ROTATE_Y = v
+                info(f"Xoay Y = {OBJ_ROTATE_Y}°")
+            else:
+                warn("Chỉ nhận 0/90/180/270.")
+        except ValueError:
+            warn("Giá trị không hợp lệ.")
+    elif ch == "6":
+        OBJ_SWAP_YZ = not OBJ_SWAP_YZ
+        info(f"Y↔Z swap = {OBJ_SWAP_YZ}")
 
 
 # ═══════════════════════════════════════════════════════

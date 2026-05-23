@@ -26,7 +26,48 @@ from ..streams import EndianBinaryWriter
 #  OBJ PARSER
 # ═══════════════════════════════════════════════
 
-def parse_obj(filepath):
+def _make_obj_transform(source, rotate_y_deg, swap_yz):
+    """Tạo hàm chuyển vertex/normal + cờ đảo winding theo nguồn OBJ.
+
+    source:
+      "aov"      → OBJ do tool này export (X đã flip, winding đảo)
+                   → un-flip X + đảo winding lại để khớp Unity.
+      "external" → OBJ từ Blender/3DS/Maya gốc (chưa qua tool)
+                   → giữ nguyên X, giữ winding.
+
+    rotate_y_deg: xoay quanh trục Y (0/90/180/270) — sửa hướng nhân vật.
+    swap_yz: True nếu nguồn Z-up (đa số Blender Y-up nên False).
+    """
+    flip_x = (source == "aov")
+    reverse_winding = (source == "aov")
+
+    theta = math.radians(rotate_y_deg or 0)
+    cosY = math.cos(theta)
+    sinY = math.sin(theta)
+    need_rotate = bool(rotate_y_deg)
+
+    def xf(vx, vy, vz):
+        if flip_x:
+            vx = -vx
+        if swap_yz:
+            vy, vz = vz, vy
+        if need_rotate:
+            nx = vx * cosY + vz * sinY
+            nz = -vx * sinY + vz * cosY
+            vx, vz = nx, nz
+        return vx, vy, vz
+
+    return xf, reverse_winding
+
+
+def parse_obj(filepath, source="aov", rotate_y_deg=0, swap_yz=False):
+    """Đọc OBJ và chuyển về toạ độ Unity (X-trái, Y-lên, Z-trước).
+
+    Tham số source/rotate_y_deg/swap_yz xử lý OBJ ngoài có hướng/trục khác.
+    """
+    transform, reverse_winding = _make_obj_transform(
+        source, rotate_y_deg, swap_yz)
+
     raw_v, raw_vt, raw_vn = [], [], []
     groups, cur_name, cur_faces = [], "default", []
 
@@ -64,17 +105,18 @@ def parse_obj(filepath):
         if key not in vmap:
             new_i = len(out_v) // 3; vmap[key] = new_i
             vi, ti, ni = key
-            vx, vy, vz = raw_v[vi]
-            out_v.extend([-vx, vy, vz])   # restore Unity X (MeshExporter flips X)
+            vx, vy, vz = transform(*raw_v[vi])
+            out_v.extend([vx, vy, vz])
             out_vt.extend(raw_vt[ti] if ti >= 0 and raw_vt else [0.0, 0.0])
             if ni >= 0 and raw_vn:
-                nx, ny, nz = raw_vn[ni]; out_vn.extend([-nx, ny, nz])
+                nx, ny, nz = transform(*raw_vn[ni])
+                out_vn.extend([nx, ny, nz])
             else:
                 out_vn.extend([0.0, 1.0, 0.0])
         return vmap[key]
 
     # Pre-populate: unified[vi] = vi → skin_weight[v] maps to position[v] correctly
-    # Unity OBJ always uses f a/a/a format (vi=ti=ni)
+    # (chỉ chạy với OBJ chuẩn Unity từ AOV; với OBJ ngoài không cần nhưng vô hại)
     for vi in range(len(raw_v)):
         get_idx((vi, vi, vi))
 
@@ -85,9 +127,10 @@ def parse_obj(filepath):
             ia = get_idx(tri[0])
             ib = get_idx(tri[1])
             ic = get_idx(tri[2])
-            # REVERSED: MeshExporter writes f(idx2,idx1,idx0) → reverse here to compensate
-            # Without this: import→export doubles the reversal → inside-out faces → wall hack
-            out_idx.extend([ic, ib, ia])
+            if reverse_winding:
+                out_idx.extend([ic, ib, ia])
+            else:
+                out_idx.extend([ia, ib, ic])
         submeshes.append({"first": first, "count": len(out_idx) - first, "name": name})
 
     vc = len(out_v) // 3
@@ -605,7 +648,8 @@ def _serialize_mesh(mesh):
 # ═══════════════════════════════════════════════
 
 def import_obj_to_mesh(obj_reader, filepath, progress_cb=None,
-                       auto_scale=True, knn_k=4):
+                       auto_scale=True, knn_k=4,
+                       obj_source="aov", rotate_y_deg=0, swap_yz=False):
     """
     Import .obj → Unity Mesh.
 
@@ -617,7 +661,9 @@ def import_obj_to_mesh(obj_reader, filepath, progress_cb=None,
       • Vertex data = `vertices` gốc (không bị scale/shift)
       • Weight transfer nearest-vertex với bone clamp + normalize
     """
-    vertices, normals, uvs, tangents, indices, submeshes = parse_obj(filepath)
+    vertices, normals, uvs, tangents, indices, submeshes = parse_obj(
+        filepath, source=obj_source,
+        rotate_y_deg=rotate_y_deg, swap_yz=swap_yz)
     if not vertices or not indices:
         raise ValueError("OBJ file không có geometry hợp lệ.")
     new_vc = len(vertices) // 3

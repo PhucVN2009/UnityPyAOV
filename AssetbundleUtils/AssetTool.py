@@ -339,7 +339,7 @@ def _export_audio(obj, data, bundle, name, out_dir):
 #  IMPORT
 # ──────────────────────────────────────────────────────────
 def import_file(obj, filepath, ext, auto_scale=True, force_rgba32=False,
-                knn_k=4):
+                knn_k=4, obj_source="aov", rotate_y_deg=0, swap_yz=False):
     """
     Nhập 1 file vào object. Trả về (ok: bool, thông_báo: str).
     Định dạng được suy ra từ ext.
@@ -354,7 +354,8 @@ def import_file(obj, filepath, ext, auto_scale=True, force_rgba32=False,
             if ext in ("png", "jpg", "jpeg", "bmp", "tga"):
                 ok, msg = _import_texture(obj, filepath, force_rgba32)
             elif ext == "obj":
-                ok, msg = _import_mesh(obj, filepath, auto_scale, knn_k)
+                ok, msg = _import_mesh(obj, filepath, auto_scale, knn_k,
+                                       obj_source, rotate_y_deg, swap_yz)
             elif ext == "json":
                 ok, msg = _import_json(obj, filepath)
             elif ext in ("txt", "bin"):
@@ -410,13 +411,23 @@ def _import_texture(obj, filepath, force_rgba32):
     return True, f"texture {data.m_Width}x{data.m_Height} -> id={obj.path_id}"
 
 
-def _import_mesh(obj, filepath, auto_scale, knn_k=4):
+def _import_mesh(obj, filepath, auto_scale, knn_k=4,
+                 obj_source="aov", rotate_y_deg=0, swap_yz=False):
     from AssetbundleUtils.UnityPy_AOV.export.MeshImporter import import_obj_to_mesh
 
     if obj.type.name != "Mesh":
         return False, f"id={obj.path_id} không phải Mesh"
-    import_obj_to_mesh(obj, filepath, auto_scale=auto_scale, knn_k=knn_k)
-    return True, f"mesh -> id={obj.path_id} (k={knn_k})"
+    import_obj_to_mesh(obj, filepath, auto_scale=auto_scale, knn_k=knn_k,
+                       obj_source=obj_source,
+                       rotate_y_deg=rotate_y_deg, swap_yz=swap_yz)
+    tag = f"k={knn_k}"
+    if obj_source != "aov":
+        tag += f",{obj_source}"
+    if rotate_y_deg:
+        tag += f",rotY={rotate_y_deg}"
+    if swap_yz:
+        tag += ",Y↔Z"
+    return True, f"mesh -> id={obj.path_id} ({tag})"
 
 
 def _import_json(obj, filepath):
